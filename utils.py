@@ -1,18 +1,23 @@
-import aiohttp
-import asyncio
+import re
 import os
 import time
+import asyncio
+import subprocess
+import aiohttp
+
 from urllib.parse import urlparse
 from config import settings
 
-# Browser-like headers to bypass bot blockers and resolve complex/short links
+# ---------------------------------------------------------------------------
+# Browser-like headers — tricks most file hosts into responding normally
+# ---------------------------------------------------------------------------
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/122.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.5",
     "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
@@ -24,23 +29,22 @@ HEADERS = {
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
-def format_bytes(size: int) -> str:
-    """Human-readable byte size."""
-    power = 2 ** 10
-    n = 0
-    labels = {0: "B", 1: "KB", 2: "MB", 3: "GB", 4: "TB"}
-    while size >= power and n < 4:
-        size /= power
-        n += 1
-    return f"{size:.2f} {labels[n]}"
+def format_bytes(size):
+    """Return human-readable byte size string."""
+    size = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024.0:
+            return f"{size:.2f} {unit}"
+        size /= 1024.0
+    return f"{size:.2f} PB"
 
 
-def format_speed(speed: float) -> str:
-    return f"{format_bytes(int(speed))}/s"
+def format_speed(bps):
+    return format_bytes(bps) + "/s"
 
 
-def format_eta(seconds: float) -> str:
-    if seconds < 0 or seconds > 86400:
+def format_eta(seconds):
+    if seconds <= 0 or seconds > 86400:
         return "∞"
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
@@ -51,13 +55,14 @@ def format_eta(seconds: float) -> str:
     return f"{s}s"
 
 
-def format_progress(current: int, total: int, start_time: float, action: str) -> str:
-    """Full progress block with bar, speed, and ETA."""
+def format_progress(current, total, start_time, action):
+    """Render a rich progress bar string for Telegram."""
     elapsed = time.time() - start_time
     speed = current / elapsed if elapsed > 0 else 0
     remaining = (total - current) / speed if speed > 0 else 0
-    pct = (current / total * 100) if total else 0
+    pct = (current / total * 100.0) if total > 0 else 0.0
     filled = int(pct / 5)
+    filled = min(filled, 20)
     bar = "█" * filled + "░" * (20 - filled)
     icon = "⬇️" if "Download" in action else "⬆️"
     return (
@@ -69,70 +74,63 @@ def format_progress(current: int, total: int, start_time: float, action: str) ->
 
 
 # ---------------------------------------------------------------------------
-# URL resolution — follows redirects, extracts real filename
+# URL resolver — follows all redirects, extracts real filename
 # ---------------------------------------------------------------------------
 
-async def resolve_final_url(url: str) -> tuple:
+async def resolve_final_url(url):
     """
-    Follow all HTTP redirects (including PHP redirect pages like adl.php?id=...)
-    and return (final_url, filename).
-    Falls back gracefully if Content-Disposition is missing.
+    Follow all redirects and return (final_url, filename).
+    Works for direct links, short links, and PHP redirect pages.
     """
-    connector = aiohttp.TCPConnector(limit=32, ttl_dns_cache=300)
     timeout = aiohttp.ClientTimeout(total=60, connect=15)
-
-    async with aiohttp.ClientSession(
-        headers=HEADERS, connector=connector, timeout=timeout
-    ) as session:
+    async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
         async with session.get(url, allow_redirects=True) as resp:
             resp.raise_for_status()
             final_url = str(resp.url)
 
-            # 1. Try Content-Disposition: attachment; filename="foo.mp4"
+            # Try Content-Disposition header first
             cd = resp.headers.get("Content-Disposition", "")
             filename = ""
             if "filename=" in cd:
                 part = cd.split("filename=")[-1].strip().strip("\"'")
                 filename = part.split(";")[0].strip()
 
-            # 2. Try the path component of the final URL
+            # Try URL path
             if not filename:
                 path = urlparse(final_url).path
                 name = os.path.basename(path)
                 if name and "." in name:
                     filename = name
 
-            # 3. Fallback: use content-type to guess extension
+            # Fallback: guess from Content-Type
             if not filename or "." not in filename:
                 ctype = resp.headers.get("Content-Type", "application/octet-stream")
                 ext = ctype.split(";")[0].split("/")[-1]
-                ext = ext if ext not in ("octet-stream", "force-download") else "bin"
+                if ext in ("octet-stream", "force-download", "x-download", "binary"):
+                    ext = "bin"
                 filename = f"leech_file.{ext}"
 
     return final_url, filename
 
 
 # ---------------------------------------------------------------------------
-# Downloader — high-speed streaming with progress
+# Downloader — 2 MB chunks, streaming to disk
 # ---------------------------------------------------------------------------
 
-async def download_file(url: str, progress_callback=None) -> str:
-    """Download any URL to DOWNLOAD_DIR. Returns local filepath."""
+async def download_file(url, progress_callback=None):
+    """Download file from any URL to DOWNLOAD_DIR. Returns local filepath."""
     final_url, filename = await resolve_final_url(url)
 
-    # Sanitize filename
-    filename = "".join(c for c in filename if c not in r'\/:*?"<>|').strip()
+    # Sanitize filename — strip invalid chars
+    bad_chars = set('\\/|:*?"<>')
+    filename = "".join(c for c in filename if c not in bad_chars).strip()
     if not filename:
         filename = "leech_file"
 
     filepath = os.path.join(settings.DOWNLOAD_DIR, filename)
 
-    connector = aiohttp.TCPConnector(limit=32, ttl_dns_cache=300)
-    timeout = aiohttp.ClientTimeout(total=None, connect=30, sock_read=60)
-
-    async with aiohttp.ClientSession(
-        headers=HEADERS, connector=connector, timeout=timeout
-    ) as session:
+    timeout = aiohttp.ClientTimeout(total=None, connect=30, sock_read=120)
+    async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
         async with session.get(final_url, allow_redirects=True) as resp:
             resp.raise_for_status()
             total = int(resp.headers.get("Content-Length", 0))
@@ -141,7 +139,7 @@ async def download_file(url: str, progress_callback=None) -> str:
             last_update = start_time
 
             with open(filepath, "wb") as f:
-                async for chunk in resp.content.iter_chunked(2 * 1024 * 1024):  # 2 MB
+                async for chunk in resp.content.iter_chunked(2 * 1024 * 1024):
                     f.write(chunk)
                     downloaded += len(chunk)
                     now = time.time()
@@ -153,14 +151,13 @@ async def download_file(url: str, progress_callback=None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# File splitter — splits files > SPLIT_SIZE into numbered parts
+# File splitter
 # ---------------------------------------------------------------------------
 
-def split_file(filepath: str) -> list:
+def split_file(filepath):
     """
-    Split a file into chunks of settings.SPLIT_SIZE bytes.
-    Returns a list of file paths (single-element list if no split needed).
-    All parts are written to the same directory as the original file.
+    Split a file into <= SPLIT_SIZE chunks.
+    Returns list of paths. Single-item list if no split needed.
     """
     file_size = os.path.getsize(filepath)
     if file_size <= settings.SPLIT_SIZE:
@@ -172,12 +169,12 @@ def split_file(filepath: str) -> list:
 
     with open(filepath, "rb") as src:
         while True:
-            chunk = src.read(settings.SPLIT_SIZE)
-            if not chunk:
+            data = src.read(settings.SPLIT_SIZE)
+            if not data:
                 break
-            part_path = f"{base}.part{part_num:03d}{ext}"
+            part_path = "{}.part{:03d}{}".format(base, part_num, ext)
             with open(part_path, "wb") as dst:
-                dst.write(chunk)
+                dst.write(data)
             parts.append(part_path)
             part_num += 1
 
@@ -185,85 +182,74 @@ def split_file(filepath: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Thumbnail engine — ffmpeg first, then Open Graph image scraping as fallback
+# Thumbnail — ffmpeg local frame, then OG image fallback
 # ---------------------------------------------------------------------------
 
-async def get_thumbnail(filepath: str) -> str | None:
-    """
-    Try to get a thumbnail for a file.
-    Strategy 1: Run ffmpeg to extract a frame (works for video files).
-    Returns the thumbnail path, or None if ffmpeg fails.
-    """
+async def get_thumbnail_ffmpeg(filepath):
+    """Extract a video frame at 5 seconds using ffmpeg. Returns path or None."""
     thumb_path = filepath + ".thumb.jpg"
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y",
             "-i", filepath,
-            "-ss", "00:00:05",      # Seek to 5 seconds in
-            "-vframes", "1",        # Grab exactly one frame
-            "-vf", "scale=320:-1",  # Resize to 320px wide
+            "-ss", "00:00:05",
+            "-vframes", "1",
+            "-vf", "scale=320:-1",
             thumb_path,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        await proc.wait()
+        await proc.communicate()
         if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
             return thumb_path
-    except FileNotFoundError:
-        pass  # ffmpeg not installed — continue to online fallback
+    except (FileNotFoundError, OSError):
+        pass  # ffmpeg not installed
     except Exception:
         pass
     return None
 
 
-async def get_online_thumbnail(url: str, download_dir: str) -> str | None:
+async def get_thumbnail_online(source_url, download_dir):
     """
-    Strategy 2: Fetch the Open Graph og:image from the source page.
-    Works for most media sites (bbdownload, gdrive shares, etc.).
-    Downloads the image and saves it locally as a JPEG thumbnail.
-    Returns the local thumbnail path, or None on any failure.
+    Scrape og:image / twitter:image from source page.
+    Downloads the image and saves it as a local JPEG. Returns path or None.
     """
-    import re
-
     thumb_path = os.path.join(download_dir, "_og_thumb.jpg")
-
     try:
         timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
-            # Step 1: Fetch the page HTML
-            async with session.get(url, allow_redirects=True) as resp:
-                if resp.content_type and "text" not in resp.content_type:
-                    # It's a binary file directly — no HTML to scrape
-                    return None
+            async with session.get(source_url, allow_redirects=True) as resp:
+                ctype = resp.headers.get("Content-Type", "")
+                if "text" not in ctype:
+                    return None  # Direct binary — no HTML to scrape
                 html = await resp.text(errors="ignore")
 
-            # Step 2: Extract og:image or twitter:image meta tags
-            # Matches: <meta property="og:image" content="https://...">
-            patterns = [
-                r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
-                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
-                r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
-                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
-            ]
-            img_url = None
-            for pattern in patterns:
-                match = re.search(pattern, html, re.IGNORECASE)
-                if match:
-                    img_url = match.group(1).strip()
-                    break
+        # Parse OG / twitter image tags
+        patterns = [
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+            r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
+        ]
+        img_url = None
+        for pattern in patterns:
+            m = re.search(pattern, html, re.IGNORECASE)
+            if m:
+                img_url = m.group(1).strip()
+                break
 
-            if not img_url:
-                return None
+        if not img_url:
+            return None
 
-            # Make relative URLs absolute
-            if img_url.startswith("//"):
-                img_url = "https:" + img_url
-            elif img_url.startswith("/"):
-                from urllib.parse import urlparse as _up
-                base = _up(url)
-                img_url = f"{base.scheme}://{base.netloc}{img_url}"
+        # Make relative URLs absolute
+        if img_url.startswith("//"):
+            img_url = "https:" + img_url
+        elif img_url.startswith("/"):
+            parsed = urlparse(source_url)
+            img_url = "{}://{}{}".format(parsed.scheme, parsed.netloc, img_url)
 
-            # Step 3: Download the image
+        # Download the image
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(img_url) as img_resp:
                 if img_resp.status == 200:
                     data = await img_resp.read()
@@ -278,55 +264,48 @@ async def get_online_thumbnail(url: str, download_dir: str) -> str | None:
     return None
 
 
-async def get_best_thumbnail(filepath: str, source_url: str, download_dir: str) -> str | None:
+async def get_best_thumbnail(filepath, source_url, download_dir):
     """
-    Get the best available thumbnail for a file+URL combo.
-    Priority: ffmpeg (local video frame) → og:image (online) → None
+    Best-effort thumbnail: ffmpeg → og:image → None.
+    Never raises; always returns a path string or None.
     """
-    # 1. Try local ffmpeg
-    thumb = await get_thumbnail(filepath)
+    thumb = await get_thumbnail_ffmpeg(filepath)
     if thumb:
         return thumb
-
-    # 2. Try online Open Graph image from the source page
-    thumb = await get_online_thumbnail(source_url, download_dir)
-    if thumb:
-        return thumb
-
-    return None
+    thumb = await get_thumbnail_online(source_url, download_dir)
+    return thumb  # May be None — callers must handle that
 
 
 # ---------------------------------------------------------------------------
-# Page title extractor — returns a clean title from the source URL's HTML
+# Page title extractor
 # ---------------------------------------------------------------------------
 
-async def get_page_title(url: str) -> str | None:
+async def get_page_title(url):
     """
-    Fetch the <title> or og:title from the source URL's HTML.
-    Used to set a human-readable name in the Telegram caption.
-    Returns None on failure.
+    Return og:title or <title> from the source URL's HTML.
+    Returns None on any failure — never raises.
     """
-    import re
-
     try:
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
             async with session.get(url, allow_redirects=True) as resp:
-                if resp.content_type and "text" not in resp.content_type:
+                ctype = resp.headers.get("Content-Type", "")
+                if "text" not in ctype:
                     return None
                 html = await resp.text(errors="ignore")
 
-        # Try og:title first (cleaner), then fallback to <title>
-        og = re.search(
+        # og:title first (cleaner, no site branding)
+        m = re.search(
             r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
             html, re.IGNORECASE
         )
-        if og:
-            return og.group(1).strip()
+        if m:
+            return m.group(1).strip()
 
-        title_match = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
-        if title_match:
-            return title_match.group(1).strip()
+        # Fallback to <title>
+        m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
 
     except Exception:
         pass
