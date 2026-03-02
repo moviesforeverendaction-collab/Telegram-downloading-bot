@@ -4,7 +4,7 @@ import asyncio
 import random
 
 from aiohttp import web
-from pyrogram import Client, filters, idle
+from pyrogram import Client, filters, idle, enums
 from pyrogram.types import (
     Message,
     InlineKeyboardMarkup,
@@ -33,29 +33,25 @@ app = Client(
 
 # ---------------------------------------------------------------------------
 # State: pending download entries waiting for format choice
-# pending[orig_message_id] = { filepath, source_url, display_name, status, chat_id, reply_to }
 # ---------------------------------------------------------------------------
 pending = {}
 
 # Anti-flood: track last edit time per message id
 _last_edit_time = {}
-FLOOD_COOLDOWN = 3.0  # seconds between message edits
+FLOOD_COOLDOWN = 3.0
 
 
 async def safe_edit(msg, text):
-    """
-    Edit a message — but throttle to once per FLOOD_COOLDOWN seconds.
-    Silently drops the edit if called too fast (anti-flood, anti-ban).
-    """
+    """Edit a message, throttled to once per FLOOD_COOLDOWN seconds."""
     now = time.time()
     msg_id = msg.id
     if now - _last_edit_time.get(msg_id, 0) < FLOOD_COOLDOWN:
         return
     try:
-        await msg.edit_text(text, parse_mode="markdown")
+        await msg.edit_text(text, parse_mode=enums.ParseMode.MARKDOWN)
         _last_edit_time[msg_id] = time.time()
     except Exception:
-        pass  # 'message not modified' or rate limit — never crash here
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +67,7 @@ async def start_handler(client, message):
         "🎬 Upload as **Document** or **Video** — your choice\n"
         "🖼 Thumbnails via ffmpeg or Online OG image\n"
         "⚡ Fast: 2 MB download chunks",
-        parse_mode="markdown",
+        parse_mode=enums.ParseMode.MARKDOWN,
     )
 
 
@@ -81,7 +77,10 @@ async def start_handler(client, message):
 @app.on_message(filters.text & filters.regex(r"https?://\S+"))
 async def leech_handler(client, message):
     url = message.text.strip()
-    status = await message.reply_text("🔍 **Resolving link...**", parse_mode="markdown")
+    status = await message.reply_text(
+        "🔍 **Resolving link...**",
+        parse_mode=enums.ParseMode.MARKDOWN,
+    )
 
     # Human-like delay (anti-ban)
     await asyncio.sleep(random.uniform(0.5, 1.5))
@@ -97,11 +96,11 @@ async def leech_handler(client, message):
         size = os.path.getsize(filepath)
         filename = os.path.basename(filepath)
 
-        # Fetch the page title from the source URL in parallel
+        # Fetch page title from source URL
         page_title = await get_page_title(url)
         display_name = page_title if page_title else filename
 
-        # Store everything for the callback
+        # Store for callback
         pending[message.id] = {
             "filepath": filepath,
             "source_url": url,
@@ -112,25 +111,32 @@ async def leech_handler(client, message):
             "reply_to": message.id,
         }
 
-        # Ask user: Document or Video?
+        # Ask: Document or Video?
         await status.edit_text(
             "✅ **Download complete!**\n"
             "🏷 **{}**\n"
             "📄 `{}`\n"
             "💾 {}\n\n"
-            "📤 How would you like to upload?".format(display_name, filename, format_bytes(size)),
+            "📤 How would you like to upload?".format(
+                display_name, filename, format_bytes(size)
+            ),
             reply_markup=InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("📄 Document", callback_data="ul:doc:{}".format(message.id)),
-                    InlineKeyboardButton("🎬 Video",    callback_data="ul:vid:{}".format(message.id)),
+                    InlineKeyboardButton(
+                        "📄 Document",
+                        callback_data="ul:doc:{}".format(message.id),
+                    ),
+                    InlineKeyboardButton(
+                        "🎬 Video",
+                        callback_data="ul:vid:{}".format(message.id),
+                    ),
                 ]
             ]),
-            parse_mode="markdown",
+            parse_mode=enums.ParseMode.MARKDOWN,
         )
 
     except Exception as exc:
-        err = str(exc)
-        await safe_edit(status, "❌ **Error:** `{}`".format(err))
+        await safe_edit(status, "❌ **Error:** `{}`".format(str(exc)))
         if filepath and os.path.exists(filepath):
             try:
                 os.remove(filepath)
@@ -146,13 +152,16 @@ async def upload_callback(client, query):
     await query.answer()
 
     parts_of_data = query.data.split(":")
-    fmt = parts_of_data[1]           # "doc" or "vid"
+    fmt = parts_of_data[1]
     orig_id = int(parts_of_data[2])
 
     entry = pending.pop(orig_id, None)
     if not entry:
         try:
-            await query.message.edit_text("❌ Session expired. Please send the link again.")
+            await query.message.edit_text(
+                "❌ Session expired. Please send the link again.",
+                parse_mode=enums.ParseMode.MARKDOWN,
+            )
         except Exception:
             pass
         return
@@ -173,9 +182,11 @@ async def upload_callback(client, query):
         file_parts = split_file(filepath)
         total_parts = len(file_parts)
 
-        # Step 2: Thumbnail
+        # Step 2: Thumbnail (ffmpeg then og:image fallback)
         await safe_edit(status, "🖼 **Fetching thumbnail...**")
-        thumb_path = await get_best_thumbnail(file_parts[0], source_url, settings.DOWNLOAD_DIR)
+        thumb_path = await get_best_thumbnail(
+            file_parts[0], source_url, settings.DOWNLOAD_DIR
+        )
 
         upload_start = time.time()
 
@@ -185,7 +196,6 @@ async def upload_callback(client, query):
             part_name = os.path.basename(part)
             part_label = "Part {}/{} ".format(idx, total_parts) if total_parts > 1 else ""
 
-            # Mutable container so the inner async func can update it
             last_cb = [time.time()]
 
             async def up_progress(current, total,
@@ -196,7 +206,10 @@ async def upload_callback(client, query):
                 if now - _last[0] >= FLOOD_COOLDOWN:
                     await safe_edit(
                         status,
-                        format_progress(current, total, _start, "Uploading {}".format(_label))
+                        format_progress(
+                            current, total, _start,
+                            "Uploading {}".format(_label)
+                        ),
                     )
                     _last[0] = now
 
@@ -206,7 +219,9 @@ async def upload_callback(client, query):
                 "💾 {}".format(format_bytes(part_size)),
             ]
             if total_parts > 1:
-                caption_lines.append("📂 Part **{}** of **{}**".format(idx, total_parts))
+                caption_lines.append(
+                    "📂 Part **{}** of **{}**".format(idx, total_parts)
+                )
             caption = "\n".join(caption_lines)
 
             send_kwargs = dict(
@@ -214,7 +229,7 @@ async def upload_callback(client, query):
                 caption=caption,
                 reply_to_message_id=reply_to,
                 progress=up_progress,
-                parse_mode="markdown",
+                parse_mode=enums.ParseMode.MARKDOWN,
             )
             if thumb_path:
                 send_kwargs["thumb"] = thumb_path
@@ -231,17 +246,19 @@ async def upload_callback(client, query):
                     **send_kwargs,
                 )
 
-            # Brief delay between parts (anti-ban)
+            # Brief delay between consecutive parts (anti-ban)
             if idx < total_parts:
                 await asyncio.sleep(random.uniform(1.0, 2.5))
 
         await safe_edit(status, "✅ **All done!** 🎉")
 
     except Exception as exc:
-        await safe_edit(status, "❌ **Upload error:** `{}`".format(str(exc)))
+        await safe_edit(
+            status, "❌ **Upload error:** `{}`".format(str(exc))
+        )
 
     finally:
-        # Cleanup: remove part files (original is same as part[0] if no split)
+        # Cleanup part files
         for p in file_parts:
             if p != filepath and os.path.exists(p):
                 try:
@@ -277,8 +294,7 @@ async def start_web_server():
 
 
 # ---------------------------------------------------------------------------
-# Main entry point
-# IMPORTANT: Must use app.run() — NOT asyncio.run() — with Pyrogram
+# Entry point — MUST use app.run(), NOT asyncio.run()
 # ---------------------------------------------------------------------------
 async def main():
     await start_web_server()
