@@ -22,6 +22,7 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.5",
     "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 # ---------------------------------------------------------------------------
@@ -29,6 +30,9 @@ HEADERS = {
 # ---------------------------------------------------------------------------
 
 def format_bytes(size):
+    """Format bytes to human readable string."""
+    if size is None or size < 0:
+        return "Unknown"
     size = float(size)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if size < 1024.0:
@@ -38,14 +42,21 @@ def format_bytes(size):
 
 
 def format_speed(bps):
+    """Format speed in bytes per second."""
+    if bps is None or bps < 0:
+        return "Unknown"
     return format_bytes(bps) + "/s"
 
 
 def format_eta(seconds):
-    if seconds <= 0 or seconds > 86400:
+    """Format ETA in human readable form."""
+    if seconds is None or seconds <= 0 or seconds > 86400 * 7:  # Max 7 days
         return "∞"
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
+    d, h = divmod(h, 24)
+    if d:
+        return "{}d {}h {}m".format(d, h, m)
     if h:
         return "{}h {}m {}s".format(h, m, s)
     if m:
@@ -67,14 +78,26 @@ def format_duration(seconds):
 
 
 def format_progress(current, total, start_time, action):
-    """Render progress bar string for Telegram (MarkdownV2-safe)."""
-    elapsed = time.time() - start_time
+    """Render progress bar string for Telegram (HTML-safe)."""
+    if total <= 0:
+        total = current or 1  # Prevent division by zero
+    
+    elapsed = time.time() - start_time if start_time else 0
     speed = current / elapsed if elapsed > 0 else 0
     remaining = (total - current) / speed if speed > 0 else 0
-    pct = (current / total * 100.0) if total > 0 else 0.0
+    pct = min((current / total * 100.0), 100.0) if total > 0 else 0.0
     filled = min(int(pct / 5), 20)
     bar = "█" * filled + "░" * (20 - filled)
     icon = "⬇️" if "Download" in action else "⬆️"
+    
+    # Handle edge cases
+    if pct >= 100:
+        eta_str = "Done!"
+    elif remaining <= 0:
+        eta_str = "Calculating..."
+    else:
+        eta_str = format_eta(remaining)
+    
     return (
         "{} <b>{}</b>\n"
         "<code>{}</code> {:.1f}%\n"
@@ -84,7 +107,7 @@ def format_progress(current, total, start_time, action):
         icon, action,
         bar, pct,
         format_bytes(current), format_bytes(total),
-        format_speed(speed), format_eta(remaining)
+        format_speed(speed), eta_str
     )
 
 
@@ -93,8 +116,10 @@ def format_progress(current, total, start_time, action):
 # ---------------------------------------------------------------------------
 
 async def resolve_final_url(url):
+    """Resolve URL redirects and extract filename."""
     timeout = aiohttp.ClientTimeout(total=60, connect=15)
     connector = aiohttp.TCPConnector(limit=16, ttl_dns_cache=300)
+    
     async with aiohttp.ClientSession(
         headers=HEADERS, timeout=timeout, connector=connector
     ) as session:
@@ -105,7 +130,12 @@ async def resolve_final_url(url):
             cd = resp.headers.get("Content-Disposition", "")
             filename = ""
             if "filename=" in cd:
-                part = cd.split("filename=")[-1].strip().strip("\"'")
+                # Handle both quoted and unquoted filenames
+                part = cd.split("filename=")[-1].strip()
+                if part.startswith('"') or part.startswith("'"):
+                    part = part[1:]
+                if part.endswith('"') or part.endswith("'"):
+                    part = part[:-1]
                 filename = part.split(";")[0].strip()
 
             if not filename:
@@ -119,6 +149,8 @@ async def resolve_final_url(url):
                 ext = ctype.split(";")[0].split("/")[-1]
                 if ext in ("octet-stream", "force-download", "x-download", "binary"):
                     ext = "bin"
+                elif ext in ("html", "text", "json", "xml"):
+                    ext = "html"
                 filename = "leech_file.{}".format(ext)
 
     return final_url, filename
@@ -129,14 +161,24 @@ async def resolve_final_url(url):
 # ---------------------------------------------------------------------------
 
 async def download_file(url, progress_callback=None):
+    """Download file with progress tracking."""
     final_url, filename = await resolve_final_url(url)
 
+    # Clean filename - remove invalid characters
     bad_chars = set('\\/|:*?"<>')
     filename = "".join(c for c in filename if c not in bad_chars).strip()
     if not filename:
         filename = "leech_file"
-
+    
+    # Ensure unique filename to prevent conflicts
+    base, ext = os.path.splitext(filename)
     filepath = os.path.join(settings.DOWNLOAD_DIR, filename)
+    counter = 1
+    while os.path.exists(filepath):
+        filename = "{}_{}{}".format(base, counter, ext)
+        filepath = os.path.join(settings.DOWNLOAD_DIR, filename)
+        counter += 1
+
     timeout = aiohttp.ClientTimeout(total=None, connect=30, sock_read=120)
     connector = aiohttp.TCPConnector(limit=16, ttl_dns_cache=300, force_close=False)
 
@@ -158,6 +200,10 @@ async def download_file(url, progress_callback=None):
                     if progress_callback and (now - last_update >= 3.0):
                         await progress_callback("Downloading", downloaded, total, start_time)
                         last_update = now
+            
+            # Final progress update
+            if progress_callback:
+                await progress_callback("Downloading", downloaded, total or downloaded, start_time)
 
     return filepath
 
@@ -167,6 +213,7 @@ async def download_file(url, progress_callback=None):
 # ---------------------------------------------------------------------------
 
 def split_file(filepath):
+    """Split file into parts if larger than SPLIT_SIZE."""
     file_size = os.path.getsize(filepath)
     if file_size <= settings.SPLIT_SIZE:
         return [filepath]
@@ -206,6 +253,10 @@ async def extract_video_metadata(filepath):
         "audio_codec": None,
         "bitrate_kbps": None,
     }
+    
+    if not os.path.exists(filepath):
+        return result
+        
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffprobe",
@@ -217,7 +268,8 @@ async def extract_video_metadata(filepath):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await proc.communicate()
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        
         if not stdout:
             return result
 
@@ -230,12 +282,18 @@ async def extract_video_metadata(filepath):
             (s.get("duration") for s in streams if s.get("duration")), None
         )
         if dur:
-            result["duration"] = int(float(dur))
+            try:
+                result["duration"] = int(float(dur))
+            except (ValueError, TypeError):
+                pass
 
         # Bitrate
         brate = fmt.get("bit_rate")
         if brate:
-            result["bitrate_kbps"] = int(int(brate) / 1000)
+            try:
+                result["bitrate_kbps"] = int(int(brate) / 1000)
+            except (ValueError, TypeError):
+                pass
 
         # Video stream
         for s in streams:
@@ -243,14 +301,18 @@ async def extract_video_metadata(filepath):
                 result["video_codec"] = s.get("codec_name", "").upper()
                 result["width"] = s.get("width")
                 result["height"] = s.get("height")
+                break  # Only first video stream
 
         # Audio stream
         for s in streams:
             if s.get("codec_type") == "audio" and not result["audio_codec"]:
                 result["audio_codec"] = s.get("codec_name", "").upper()
+                break  # Only first audio stream
 
     except (FileNotFoundError, OSError):
         pass  # ffprobe not installed
+    except asyncio.TimeoutError:
+        pass  # ffprobe timed out
     except Exception:
         pass
 
@@ -273,15 +335,22 @@ _STOP_TAGS = re.compile(
     re.IGNORECASE,
 )
 
+# Clean up common separators
+_SEPARATOR_PATTERN = re.compile(r"[._]+")
+
+
 def clean_title(filename):
     """
     Extract a clean title from a filename like:
     'Ant.Man.and.the.Wasp.2023.1080p.BluRay.x264.mkv'
-    → 'Ant Man and the Wasp'
+    → 'Ant Man And The Wasp'
     """
+    if not filename:
+        return "Unknown"
+        
     name, _ = os.path.splitext(filename)
     # Replace dots, underscores, hyphens with spaces
-    name = re.sub(r"[._]", " ", name)
+    name = _SEPARATOR_PATTERN.sub(" ", name)
     # Strip leading/trailing spaces
     name = name.strip()
 
@@ -305,45 +374,52 @@ async def fetch_movie_poster(title, download_dir):
     Downloads the best available artwork and saves it as a local JPEG.
     Returns local path or None.
     """
-    poster_path = os.path.join(download_dir, "_poster.jpg")
+    if not title:
+        return None
+        
+    poster_path = os.path.join(download_dir, "_poster_{}.jpg".format(int(time.time())))
+    
     try:
         query = quote_plus(title)
-        url = "https://itunes.apple.com/search?term={}&media=movie&limit=3&entity=movie".format(query)
-
+        
+        # Try movie search first
+        urls_to_try = [
+            "https://itunes.apple.com/search?term={}&media=movie&limit=5&entity=movie".format(query),
+            "https://itunes.apple.com/search?term={}&media=tvShow&limit=5&entity=tvSeason".format(query),
+        ]
+        
         timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json(content_type=None)
-
-        results = data.get("results", [])
-        if not results:
-            # Try TV search fallback
-            url2 = "https://itunes.apple.com/search?term={}&media=tvShow&limit=3".format(query)
+        
+        for url in urls_to_try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url2) as resp:
-                    if resp.status == 200:
-                        data2 = await resp.json(content_type=None)
-                        results = data2.get("results", [])
-
-        if not results:
-            return None
-
-        # Get the highest-res artwork (replace 100x100bb with 600x600bb)
-        artwork_url = results[0].get("artworkUrl100", "")
-        if not artwork_url:
-            return None
-        artwork_url = artwork_url.replace("100x100bb", "600x600bb")
-
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(artwork_url) as img_resp:
-                if img_resp.status == 200:
-                    data_bytes = await img_resp.read()
-                    if data_bytes:
-                        with open(poster_path, "wb") as f:
-                            f.write(data_bytes)
-                        return poster_path
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        continue
+                    try:
+                        data = await resp.json(content_type=None)
+                    except Exception:
+                        continue
+                    
+                    results = data.get("results", [])
+                    if not results:
+                        continue
+                    
+                    # Get the highest-res artwork (replace 100x100bb with 10000x10000bb for max quality)
+                    artwork_url = results[0].get("artworkUrl100", "")
+                    if not artwork_url:
+                        continue
+                    
+                    # Try to get highest resolution
+                    artwork_url = artwork_url.replace("100x100bb", "10000x10000bb")
+                    
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.get(artwork_url) as img_resp:
+                            if img_resp.status == 200:
+                                data_bytes = await img_resp.read()
+                                if data_bytes and len(data_bytes) > 1000:  # Ensure it's not an error page
+                                    with open(poster_path, "wb") as f:
+                                        f.write(data_bytes)
+                                    return poster_path
 
     except Exception:
         pass
@@ -357,7 +433,11 @@ async def fetch_movie_poster(title, download_dir):
 
 async def get_thumbnail_ffmpeg(filepath):
     """Extract a video frame at 5s using ffmpeg. Returns path or None."""
-    thumb_path = filepath + ".thumb.jpg"
+    if not os.path.exists(filepath):
+        return None
+        
+    thumb_path = filepath + ".thumb_{}.jpg".format(int(time.time()))
+    
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y",
@@ -369,19 +449,33 @@ async def get_thumbnail_ffmpeg(filepath):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        await proc.communicate()
-        if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
+        await asyncio.wait_for(proc.communicate(), timeout=30)
+        
+        if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 1000:
             return thumb_path
     except (FileNotFoundError, OSError):
         pass
+    except asyncio.TimeoutError:
+        pass
     except Exception:
         pass
+    
+    # Cleanup failed thumbnail
+    if os.path.exists(thumb_path):
+        try:
+            os.remove(thumb_path)
+        except Exception:
+            pass
     return None
 
 
 async def get_thumbnail_online(source_url, download_dir):
     """Scrape og:image / twitter:image from source page. Returns path or None."""
-    thumb_path = os.path.join(download_dir, "_og_thumb.jpg")
+    if not source_url:
+        return None
+        
+    thumb_path = os.path.join(download_dir, "_og_thumb_{}.jpg".format(int(time.time())))
+    
     try:
         timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
@@ -391,11 +485,15 @@ async def get_thumbnail_online(source_url, download_dir):
                     return None
                 html = await resp.text(errors="ignore")
 
+        # More comprehensive regex patterns for meta images
         patterns = [
             r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
             r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
             r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+name=["\']twitter:image:src["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']',
         ]
+        
         img_url = None
         for pattern in patterns:
             m = re.search(pattern, html, re.IGNORECASE)
@@ -406,23 +504,36 @@ async def get_thumbnail_online(source_url, download_dir):
         if not img_url:
             return None
 
+        # Handle protocol-relative and relative URLs
         if img_url.startswith("//"):
             img_url = "https:" + img_url
         elif img_url.startswith("/"):
             parsed = urlparse(source_url)
             img_url = "{}://{}{}".format(parsed.scheme, parsed.netloc, img_url)
+        elif not img_url.startswith(("http://", "https://")):
+            # Assume relative URL without leading slash
+            parsed = urlparse(source_url)
+            base_path = os.path.dirname(parsed.path)
+            img_url = "{}://{}{}/{}".format(parsed.scheme, parsed.netloc, base_path, img_url)
 
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(img_url) as img_resp:
+            async with session.get(img_url, headers=HEADERS) as img_resp:
                 if img_resp.status == 200:
                     data = await img_resp.read()
-                    if data:
+                    if data and len(data) > 1000:
                         with open(thumb_path, "wb") as f:
                             f.write(data)
                         return thumb_path
 
     except Exception:
         pass
+    
+    # Cleanup failed thumbnail
+    if os.path.exists(thumb_path):
+        try:
+            os.remove(thumb_path)
+        except Exception:
+            pass
     return None
 
 
@@ -451,6 +562,10 @@ async def get_best_thumbnail(filepath, source_url, download_dir, title=None):
 # ---------------------------------------------------------------------------
 
 async def get_page_title(url):
+    """Extract page title or og:title from URL."""
+    if not url:
+        return None
+        
     try:
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
@@ -460,16 +575,22 @@ async def get_page_title(url):
                     return None
                 html = await resp.text(errors="ignore")
 
+        # Try Open Graph title first
         m = re.search(
             r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
             html, re.IGNORECASE,
         )
         if m:
-            return m.group(1).strip()
+            title = m.group(1).strip()
+            if title:
+                return title
 
-        m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
+        # Fallback to regular title tag
+        m = re.search(r'<title[^>]*>([^<]+)</title>', html, re.IGNORECASE)
         if m:
-            return m.group(1).strip()
+            title = m.group(1).strip()
+            if title:
+                return title
 
     except Exception:
         pass
