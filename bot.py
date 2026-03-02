@@ -3,6 +3,7 @@ import time
 import asyncio
 import random
 import datetime
+import re
 
 from aiohttp import web
 from pyrogram import Client, filters, idle, enums
@@ -39,8 +40,10 @@ app = Client(
 # pending[orig_message_id] = { ... }
 pending = {}
 
+# Cleanup tracking
 _last_edit_time = {}
 FLOOD_COOLDOWN = 3.0
+MAX_PENDING_AGE = 3600  # 1 hour max for pending entries
 
 # Video file extensions (for ffprobe metadata + poster lookup)
 VIDEO_EXTS = {
@@ -61,11 +64,34 @@ def now_ist():
     return ist.strftime("%d %b %Y, %I:%M %p IST")
 
 
+def cleanup_old_entries():
+    """Remove old pending entries and _last_edit_time entries to prevent memory leaks."""
+    now = time.time()
+    expired = [k for k, v in pending.items() if now - v.get("timestamp", 0) > MAX_PENDING_AGE]
+    for k in expired:
+        entry = pending.pop(k, None)
+        if entry:
+            filepath = entry.get("filepath")
+            if filepath and os.path.exists(filepath):
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
+    
+    # Cleanup old edit times (older than 1 hour)
+    expired_edits = [k for k, v in _last_edit_time.items() if now - v > 3600]
+    for k in expired_edits:
+        _last_edit_time.pop(k, None)
+
+
 def build_caption(display_name, filename, filesize, meta, total_parts=1, part_idx=1):
     """
     Build a rich HTML caption with quoted title, tech specs, and download time.
     Stays within Telegram's 1024-char caption limit.
     """
+    # Handle None meta
+    meta = meta or {}
+    
     lines = []
 
     # Title line with quotes
@@ -137,7 +163,7 @@ async def safe_edit(msg, text, parse_mode=enums.ParseMode.HTML):
         return
     try:
         await msg.edit_text(text, parse_mode=parse_mode)
-        _last_edit_time[msg.id] = time.time()
+        _last_edit_time[msg.id] = now
     except Exception:
         pass
 
@@ -148,39 +174,122 @@ async def safe_edit(msg, text, parse_mode=enums.ParseMode.HTML):
 
 @app.on_message(filters.command("start"))
 async def start_handler(client, message):
-    await message.reply_text(
+    welcome_text = (
         "🚀 <b>TG Leecher Bot</b>\n\n"
-        "Send me any downloadable link!\n\n"
-        "✅ Direct links, short links &amp; complex redirects\n"
-        "✂️ Auto-splits files <b>&gt; 1.9 GB</b> into numbered parts\n"
+        "Welcome! I'm your advanced file download and upload assistant.\n\n"
+        "<b>✨ Features:</b>\n"
+        "✅ Direct links, short links & complex redirects\n"
+        "✂️ Auto-splits files <b>> 1.9 GB</b> into numbered parts\n"
         "🎬 Upload as <b>Document</b> or <b>Video</b> — your choice\n"
         "🖼 Movie/Series posters via iTunes API + ffmpeg\n"
         "📊 Full metadata: resolution, codec, bitrate, duration\n"
-        "⚡ Fast: 4 MB chunks, 16 workers",
+        "⚡ Fast: 4 MB chunks, 16 workers\n\n"
+        "<b>📝 How to use:</b>\n"
+        "Simply send me any downloadable link!"
+    )
+    
+    # Send with a nice animated sticker effect (emoji animation)
+    await message.reply_text(
+        welcome_text,
         parse_mode=enums.ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📖 Help", callback_data="help")],
+            [InlineKeyboardButton("💬 Support", url="https://t.me/")],
+        ])
     )
 
 
 # ---------------------------------------------------------------------------
-# URL handler
+# Help callback
 # ---------------------------------------------------------------------------
 
-@app.on_message(filters.text & filters.regex(r"https?://\S+"))
+@app.on_callback_query(filters.regex(r"^help$"))
+async def help_callback(client, query):
+    await query.answer()
+    help_text = (
+        "<b>📖 Help Guide</b>\n\n"
+        "<b>1️⃣ Sending Links:</b>\n"
+        "Just paste any direct download URL and I'll handle the rest.\n\n"
+        "<b>2️⃣ File Size:</b>\n"
+        "Files larger than 1.9 GB will be automatically split into parts.\n\n"
+        "<b>3️⃣ Upload Options:</b>\n"
+        "• <b>Document:</b> Upload as file with thumbnail\n"
+        "• <b>Video:</b> Upload as streamable video with metadata\n\n"
+        "<b>4️⃣ Metadata:</b>\n"
+        "For videos, I extract resolution, codecs, bitrate, and duration.\n\n"
+        "<b>5️⃣ Posters:</b>\n"
+        "I try to fetch movie/show posters from iTunes API."
+    )
+    await query.message.edit_text(
+        help_text,
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Back", callback_data="back_start")],
+        ])
+    )
+
+
+@app.on_callback_query(filters.regex(r"^back_start$"))
+async def back_start_callback(client, query):
+    await query.answer()
+    welcome_text = (
+        "🚀 <b>TG Leecher Bot</b>\n\n"
+        "Welcome! I'm your advanced file download and upload assistant.\n\n"
+        "<b>✨ Features:</b>\n"
+        "✅ Direct links, short links & complex redirects\n"
+        "✂️ Auto-splits files <b>> 1.9 GB</b> into numbered parts\n"
+        "🎬 Upload as <b>Document</b> or <b>Video</b> — your choice\n"
+        "🖼 Movie/Series posters via iTunes API + ffmpeg\n"
+        "📊 Full metadata: resolution, codec, bitrate, duration\n"
+        "⚡ Fast: 4 MB chunks, 16 workers\n\n"
+        "<b>📝 How to use:</b>\n"
+        "Simply send me any downloadable link!"
+    )
+    await query.message.edit_text(
+        welcome_text,
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📖 Help", callback_data="help")],
+            [InlineKeyboardButton("💬 Support", url="https://t.me/")],
+        ])
+    )
+
+
+# ---------------------------------------------------------------------------
+# URL handler - Improved regex to avoid greedy matching
+# ---------------------------------------------------------------------------
+
+@app.on_message(filters.text & filters.regex(r"https?://[^\s<>\"{}|\\^`\[\]]+"))
 async def leech_handler(client, message):
-    url = message.text.strip()
+    # Cleanup old entries periodically
+    cleanup_old_entries()
+    
+    # Extract URL more carefully
+    text = message.text.strip()
+    url_match = re.search(r"https?://[^\s<>\"{}|\\^`\[\]]+", text)
+    if not url_match:
+        return
+    
+    url = url_match.group(0)
+    
+    # Show typing indicator
+    await message.reply_chat_action(enums.ChatAction.TYPING)
+    
     status = await message.reply_text(
-        "🔍 <b>Resolving link...</b>",
+        "🔍 <b>Analyzing link...</b>\n"
+        "<code>━━━━━━━━━━━━━━━━━━━━</code>\n"
+        "Resolving redirects and fetching headers...",
         parse_mode=enums.ParseMode.HTML,
     )
 
-    await asyncio.sleep(random.uniform(0.5, 1.5))
+    await asyncio.sleep(random.uniform(0.3, 0.8))
 
     filepath = None
     try:
         async def dl_progress(action, current, total, t0):
             await safe_edit(status, format_progress(current, total, t0, action))
 
-        await safe_edit(status, "⬇️ <b>Downloading...</b>")
+        await safe_edit(status, "⬇️ <b>Downloading...</b>\n<code>Initializing connection...</code>")
         filepath = await download_file(url, dl_progress)
 
         filesize = os.path.getsize(filepath)
@@ -193,6 +302,7 @@ async def leech_handler(client, message):
         else:
             display_name = clean_title(filename)
 
+        # Store with timestamp for cleanup
         pending[message.id] = {
             "filepath": filepath,
             "source_url": url,
@@ -202,16 +312,28 @@ async def leech_handler(client, message):
             "status": status,
             "chat_id": message.chat.id,
             "reply_to": message.id,
+            "timestamp": time.time(),
         }
 
-        await status.edit_text(
-            "✅ <b>Download complete!</b>\n"
-            "🏷 <b>\"{}\"</b>\n"
+        # Format file info nicely
+        size_str = format_bytes(filesize)
+        is_large = filesize > settings.SPLIT_SIZE
+        
+        info_text = (
+            "✅ <b>Download Complete!</b>\n\n"
+            "🎬 <b>{}</b>\n"
             "📄 <code>{}</code>\n"
-            "💾 <b>{}</b>\n\n"
-            "📤 How would you like to upload?".format(
-                display_name, filename, format_bytes(filesize)
-            ),
+            "💾 <b>{}</b> {}\n\n"
+            "📤 <b>How would you like to upload?</b>"
+        ).format(
+            display_name, 
+            filename, 
+            size_str,
+            "⚠️ <i>(Will be split)</i>" if is_large else "✓"
+        )
+
+        await status.edit_text(
+            info_text,
             reply_markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton(
@@ -222,15 +344,33 @@ async def leech_handler(client, message):
                         "🎬 Video",
                         callback_data="ul:vid:{}".format(message.id),
                     ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancel",
+                        callback_data="ul:cancel:{}".format(message.id),
+                    ),
                 ]
             ]),
             parse_mode=enums.ParseMode.HTML,
         )
 
     except Exception as exc:
+        error_msg = str(exc)
+        # Make error more user-friendly
+        if "404" in error_msg:
+            error_msg = "File not found (404)"
+        elif "403" in error_msg:
+            error_msg = "Access denied (403)"
+        elif "Connection" in error_msg:
+            error_msg = "Connection failed. Please check the URL."
+        elif "timeout" in error_msg.lower():
+            error_msg = "Download timeout. Server may be slow."
+            
         await safe_edit(
             status,
-            "❌ <b>Error:</b> <code>{}</code>".format(str(exc)),
+            "❌ <b>Error:</b> <code>{}</code>\n\n"
+            "Please check the link and try again.".format(error_msg),
         )
         if filepath and os.path.exists(filepath):
             try:
@@ -240,12 +380,38 @@ async def leech_handler(client, message):
 
 
 # ---------------------------------------------------------------------------
+# Cancel callback
+# ---------------------------------------------------------------------------
+
+@app.on_callback_query(filters.regex(r"^ul:cancel:(\d+)$"))
+async def cancel_callback(client, query):
+    await query.answer("Cancelled")
+    
+    parts = query.data.split(":")
+    orig_id = int(parts[2])
+    
+    entry = pending.pop(orig_id, None)
+    if entry:
+        filepath = entry.get("filepath")
+        if filepath and os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except Exception:
+                pass
+    
+    await query.message.edit_text(
+        "❌ <b>Cancelled</b>\n\nThe download has been removed.",
+        parse_mode=enums.ParseMode.HTML,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Upload callback
 # ---------------------------------------------------------------------------
 
 @app.on_callback_query(filters.regex(r"^ul:(doc|vid):(\d+)$"))
 async def upload_callback(client, query):
-    await query.answer()
+    await query.answer("Starting upload...")
 
     parts_of_data = query.data.split(":")
     fmt = parts_of_data[1]
@@ -277,18 +443,18 @@ async def upload_callback(client, query):
 
     try:
         # 1. Split if needed
-        await safe_edit(status, "✂️ <b>Checking file size...</b>")
+        await safe_edit(status, "✂️ <b>Analyzing file...</b>\n<code>Checking if splitting is needed...</code>")
         file_parts = split_file(filepath)
         total_parts = len(file_parts)
 
         # 2. Extract video metadata (duration, codec, resolution, bitrate)
         if is_video(filepath):
-            await safe_edit(status, "📊 <b>Reading media info...</b>")
+            await safe_edit(status, "📊 <b>Reading media info...</b>\n<code>Extracting video metadata...</code>")
             meta = await extract_video_metadata(file_parts[0])
         
         # 3. Fetch poster / thumbnail
-        await safe_edit(status, "🖼 <b>Fetching poster...</b>")
-        clean_movie_title = clean_title(filename) if not display_name else display_name
+        await safe_edit(status, "🖼 <b>Fetching poster...</b>\n<code>Searching iTunes API...</code>")
+        clean_movie_title = display_name if display_name else clean_title(filename)
         thumb_path = await get_best_thumbnail(
             file_parts[0],
             source_url,
@@ -309,14 +475,15 @@ async def upload_callback(client, query):
             async def up_progress(current, total,
                                   _label=part_label,
                                   _start=upload_start,
-                                  _last=last_cb):
+                                  _last=last_cb,
+                                  _idx=idx,
+                                  _total=total_parts):
                 now = time.time()
                 if now - _last[0] >= FLOOD_COOLDOWN:
-                    await safe_edit(
-                        status,
-                        format_progress(current, total, _start,
-                                        "Uploading {}".format(_label)),
-                    )
+                    progress_text = format_progress(current, total, _start, "Uploading {}".format(_label))
+                    if _total > 1:
+                        progress_text += "\n📦 File {} of {}".format(_idx, _total)
+                    await safe_edit(status, progress_text)
                     _last[0] = now
 
             caption = build_caption(
@@ -357,12 +524,40 @@ async def upload_callback(client, query):
             if idx < total_parts:
                 await asyncio.sleep(random.uniform(1.0, 2.5))
 
-        await safe_edit(status, "✅ <b>All done!</b> 🎉")
+        # Success message with summary
+        if total_parts > 1:
+            final_text = (
+                "✅ <b>Upload Complete!</b> 🎉\n\n"
+                "📦 Uploaded <b>{}</b> parts\n"
+                "💾 Total size: <b>{}</b>\n"
+                "⏱ Time: <b>{}</b>"
+            ).format(
+                total_parts,
+                format_bytes(filesize),
+                format_duration(int(time.time() - upload_start))
+            )
+        else:
+            final_text = (
+                "✅ <b>Upload Complete!</b> 🎉\n\n"
+                "📄 <code>{}</code>\n"
+                "⏱ Time: <b>{}</b>"
+            ).format(
+                filename,
+                format_duration(int(time.time() - upload_start))
+            )
+        
+        await safe_edit(status, final_text)
 
     except Exception as exc:
+        error_msg = str(exc)
+        if "FLOOD_WAIT" in error_msg:
+            error_msg = "Rate limited by Telegram. Please wait a moment."
+        elif "timeout" in error_msg.lower():
+            error_msg = "Upload timeout. File may be too large."
+            
         await safe_edit(
             status,
-            "❌ <b>Upload error:</b> <code>{}</code>".format(str(exc)),
+            "❌ <b>Upload error:</b> <code>{}</code>".format(error_msg),
         )
 
     finally:
@@ -389,7 +584,7 @@ async def upload_callback(client, query):
 # ---------------------------------------------------------------------------
 
 async def health_check(request):
-    return web.Response(text="TG Leecher is alive!")
+    return web.Response(text="✅ TG Leecher is alive and running!")
 
 
 async def start_web_server():
@@ -398,7 +593,7 @@ async def start_web_server():
     runner = web.AppRunner(web_app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", settings.PORT).start()
-    print("Web server started on port {}".format(settings.PORT))
+    print("🌐 Web server started on port {}".format(settings.PORT))
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +603,8 @@ async def start_web_server():
 async def main():
     await start_web_server()
     await app.start()
-    print("Bot started.")
+    print("🤖 Bot started successfully!")
+    print("✨ Ready to accept downloads")
     await idle()
     await app.stop()
 

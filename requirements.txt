@@ -3,3 +3,7 @@ tgcrypto>=1.2.5
 aiohttp>=3.8.5
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+python-multipart>=0.0.6
+websockets>=11.0.0
