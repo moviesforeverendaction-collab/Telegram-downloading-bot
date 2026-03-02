@@ -3,650 +3,124 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TG Leecher - Advanced Download Bot</title>
+    <title>Telegram Leech UI</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
-        * {
-            font-family: 'Inter', sans-serif;
-        }
-        
-        .font-mono {
-            font-family: 'JetBrains Mono', monospace;
-        }
-        
         body {
-            background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%);
+            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+            color: white;
             min-height: 100vh;
-            overflow-x: hidden;
         }
-        
-        /* Animated background particles */
-        .particles {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 0;
-            overflow: hidden;
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
         }
-        
-        .particle {
-            position: absolute;
-            width: 4px;
-            height: 4px;
-            background: rgba(6, 182, 212, 0.5);
-            border-radius: 50%;
-            animation: float 15s infinite;
-        }
-        
-        @keyframes float {
-            0%, 100% {
-                transform: translateY(100vh) rotate(0deg);
-                opacity: 0;
-            }
-            10% {
-                opacity: 1;
-            }
-            90% {
-                opacity: 1;
-            }
-            100% {
-                transform: translateY(-100vh) rotate(720deg);
-                opacity: 0;
-            }
-        }
-        
-        /* Glass morphism card */
-        .glass-card {
-            background: rgba(255, 255, 255, 0.03);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            box-shadow: 
-                0 25px 50px -12px rgba(0, 0, 0, 0.5),
-                inset 0 1px 0 rgba(255, 255, 255, 0.1);
-        }
-        
-        /* Neon glow effects */
-        .neon-text {
-            text-shadow: 
-                0 0 10px rgba(6, 182, 212, 0.5),
-                0 0 20px rgba(6, 182, 212, 0.3),
-                0 0 30px rgba(6, 182, 212, 0.1);
-        }
-        
         .neon-border {
-            box-shadow: 
-                0 0 20px rgba(6, 182, 212, 0.3),
-                inset 0 0 20px rgba(6, 182, 212, 0.1);
+            box-shadow: 0 0 10px rgba(6, 182, 212, 0.5), inset 0 0 10px rgba(6, 182, 212, 0.2);
             border: 1px solid rgba(6, 182, 212, 0.5);
-        }
-        
-        /* Input styling */
-        .cyber-input {
-            background: rgba(0, 0, 0, 0.3);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            transition: all 0.3s ease;
-        }
-        
-        .cyber-input:focus {
-            border-color: rgba(6, 182, 212, 0.6);
-            box-shadow: 
-                0 0 20px rgba(6, 182, 212, 0.2),
-                inset 0 1px 0 rgba(255, 255, 255, 0.05);
-            outline: none;
-        }
-        
-        /* Button styling */
-        .cyber-btn {
-            background: linear-gradient(135deg, #0891b2 0%, #0e7490 100%);
-            position: relative;
-            overflow: hidden;
-            transition: all 0.3s ease;
-        }
-        
-        .cyber-btn::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(
-                90deg,
-                transparent,
-                rgba(255, 255, 255, 0.2),
-                transparent
-            );
-            transition: left 0.5s ease;
-        }
-        
-        .cyber-btn:hover::before {
-            left: 100%;
-        }
-        
-        .cyber-btn:hover {
-            box-shadow: 
-                0 0 30px rgba(6, 182, 212, 0.5),
-                0 10px 40px -10px rgba(6, 182, 212, 0.4);
-            transform: translateY(-2px);
-        }
-        
-        .cyber-btn:disabled {
-            background: linear-gradient(135deg, #374151 0%, #4b5563 100%);
-            cursor: not-allowed;
-            transform: none;
-        }
-        
-        .cyber-btn:disabled::before {
-            display: none;
-        }
-        
-        /* Progress bar */
-        .progress-container {
-            background: rgba(0, 0, 0, 0.4);
-            border-radius: 9999px;
-            overflow: hidden;
-            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
-        }
-        
-        .progress-bar {
-            background: linear-gradient(90deg, #06b6d4, #3b82f6, #8b5cf6);
-            background-size: 200% 100%;
-            animation: shimmer 2s linear infinite;
-            box-shadow: 
-                0 0 20px rgba(6, 182, 212, 0.5),
-                0 0 40px rgba(6, 182, 212, 0.3);
-            transition: width 0.3s ease;
-        }
-        
-        @keyframes shimmer {
-            0% { background-position: 200% 0; }
-            100% { background-position: -200% 0; }
-        }
-        
-        /* Status badges */
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.5rem 1rem;
-            border-radius: 9999px;
-            font-size: 0.875rem;
-            font-weight: 500;
-            animation: pulse 2s ease-in-out infinite;
-        }
-        
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.8; }
-        }
-        
-        .status-resolving { background: rgba(251, 191, 36, 0.2); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.3); }
-        .status-downloading { background: rgba(6, 182, 212, 0.2); color: #06b6d4; border: 1px solid rgba(6, 182, 212, 0.3); }
-        .status-complete { background: rgba(34, 197, 94, 0.2); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.3); }
-        .status-error { background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); }
-        
-        /* File info card */
-        .file-info {
-            background: rgba(0, 0, 0, 0.2);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            border-radius: 0.75rem;
-        }
-        
-        /* Scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
-        
-        ::-webkit-scrollbar-track {
-            background: rgba(0, 0, 0, 0.2);
-        }
-        
-        ::-webkit-scrollbar-thumb {
-            background: rgba(6, 182, 212, 0.5);
-            border-radius: 4px;
-        }
-        
-        ::-webkit-scrollbar-thumb:hover {
-            background: rgba(6, 182, 212, 0.7);
-        }
-        
-        /* Toast notifications */
-        .toast {
-            position: fixed;
-            bottom: 2rem;
-            right: 2rem;
-            padding: 1rem 1.5rem;
-            border-radius: 0.75rem;
-            background: rgba(15, 23, 42, 0.95);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            transform: translateX(150%);
-            transition: transform 0.3s ease;
-            z-index: 50;
-        }
-        
-        .toast.show {
-            transform: translateX(0);
-        }
-        
-        .toast.success { border-left: 4px solid #22c55e; }
-        .toast.error { border-left: 4px solid #ef4444; }
-        
-        /* Stats grid */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 1rem;
-        }
-        
-        @media (max-width: 640px) {
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-        
-        /* Spinner */
-        .spinner {
-            width: 20px;
-            height: 20px;
-            border: 2px solid transparent;
-            border-top-color: currentColor;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
         }
     </style>
 </head>
 <body class="flex items-center justify-center p-4">
-    <!-- Animated Background -->
-    <div class="particles" id="particles"></div>
-    
-    <!-- Main Container -->
-    <div class="w-full max-w-2xl relative z-10">
-        <!-- Glass Card -->
-        <div class="glass-card rounded-3xl p-8 md:p-10">
-            <!-- Header -->
-            <div class="text-center mb-10">
-                <div class="inline-flex items-center justify-center w-20 h-20 mb-6 rounded-2xl bg-gradient-to-br from-cyan-500/20 to-blue-600/20 border border-cyan-500/30">
-                    <svg class="w-10 h-10 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
-                    </svg>
-                </div>
-                <h1 class="text-4xl md:text-5xl font-bold text-white mb-3 neon-text">
-                    TG Leecher
-                </h1>
-                <p class="text-gray-400 text-lg">Advanced Download & Upload Bot</p>
+
+    <div class="glass-panel p-8 rounded-2xl w-full max-w-lg space-y-6">
+        <h1 class="text-3xl font-bold text-center bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
+            TG Leecher
+        </h1>
+
+        <div class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-1">Direct Download URL</label>
+                <input type="text" id="urlInput" placeholder="https://example.com/file.zip" 
+                       class="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white focus:outline-none focus:border-cyan-500 transition-colors">
+            </div>
+
+            <button id="leechBtn" onclick="startLeech()" 
+                    class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-semibold py-3 rounded-lg transition-all duration-300 shadow-[0_0_15px_rgba(6,182,212,0.4)] hover:shadow-[0_0_25px_rgba(6,182,212,0.6)]">
+                Leech to Telegram
+            </button>
+        </div>
+
+        <div id="statusArea" class="hidden space-y-2 pt-4 border-t border-gray-700 mt-4">
+            <div class="flex justify-between text-sm">
+                <span id="statusText" class="text-gray-300">Idle</span>
+                <span id="percentageText" class="text-cyan-400 font-mono">0%</span>
             </div>
             
-            <!-- Features -->
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
-                <div class="text-center p-4 rounded-xl bg-white/5 border border-white/10">
-                    <div class="text-2xl mb-2">⚡</div>
-                    <div class="text-xs text-gray-400">Fast Downloads</div>
-                </div>
-                <div class="text-center p-4 rounded-xl bg-white/5 border border-white/10">
-                    <div class="text-2xl mb-2">✂️</div>
-                    <div class="text-xs text-gray-400">Auto Split</div>
-                </div>
-                <div class="text-center p-4 rounded-xl bg-white/5 border border-white/10">
-                    <div class="text-2xl mb-2">🎬</div>
-                    <div class="text-xs text-gray-400">Video Upload</div>
-                </div>
-                <div class="text-center p-4 rounded-xl bg-white/5 border border-white/10">
-                    <div class="text-2xl mb-2">📊</div>
-                    <div class="text-xs text-gray-400">Metadata</div>
-                </div>
-            </div>
-            
-            <!-- Input Section -->
-            <div class="space-y-4 mb-8">
-                <div class="relative">
-                    <label class="block text-sm font-medium text-gray-300 mb-2 ml-1">
-                        Direct Download URL
-                    </label>
-                    <div class="relative">
-                        <input 
-                            type="text" 
-                            id="urlInput" 
-                            placeholder="https://example.com/file.mp4"
-                            class="cyber-input w-full rounded-xl px-5 py-4 text-white placeholder-gray-500 text-sm"
-                            onkeypress="handleKeyPress(event)"
-                        >
-                        <button 
-                            onclick="clearInput()"
-                            class="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
-                            id="clearBtn"
-                            style="display: none;"
-                        >
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-                
-                <button 
-                    id="leechBtn" 
-                    onclick="startLeech()"
-                    class="cyber-btn w-full py-4 rounded-xl text-white font-semibold text-lg flex items-center justify-center gap-3"
-                >
-                    <span id="btnText">Start Download</span>
-                    <svg id="btnIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path>
-                    </svg>
-                    <div id="btnSpinner" class="spinner hidden"></div>
-                </button>
-            </div>
-            
-            <!-- Status Area (Hidden by default) -->
-            <div id="statusArea" class="hidden space-y-6">
-                <!-- Status Header -->
-                <div class="flex items-center justify-between">
-                    <span id="statusBadge" class="status-badge status-resolving">
-                        <span class="w-2 h-2 rounded-full bg-current animate-pulse"></span>
-                        <span id="statusText">Resolving URL...</span>
-                    </span>
-                    <span id="percentageText" class="font-mono text-2xl font-bold text-cyan-400">0%</span>
-                </div>
-                
-                <!-- Progress Bar -->
-                <div class="progress-container h-4">
-                    <div id="progressBar" class="progress-bar h-full rounded-full" style="width: 0%"></div>
-                </div>
-                
-                <!-- Stats -->
-                <div class="stats-grid">
-                    <div class="file-info p-4 text-center">
-                        <div class="text-gray-500 text-xs mb-1">Downloaded</div>
-                        <div id="downloadedSize" class="text-cyan-400 font-mono font-semibold">0 MB</div>
-                    </div>
-                    <div class="file-info p-4 text-center">
-                        <div class="text-gray-500 text-xs mb-1">Total Size</div>
-                        <div id="totalSize" class="text-white font-mono font-semibold">-</div>
-                    </div>
-                    <div class="file-info p-4 text-center">
-                        <div class="text-gray-500 text-xs mb-1">Speed</div>
-                        <div id="speedText" class="text-purple-400 font-mono font-semibold">-</div>
-                    </div>
-                </div>
-                
-                <!-- File Info -->
-                <div id="fileInfo" class="file-info p-4 hidden">
-                    <div class="flex items-start gap-3">
-                        <div class="w-10 h-10 rounded-lg bg-cyan-500/20 flex items-center justify-center flex-shrink-0">
-                            <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                            </svg>
-                        </div>
-                        <div class="flex-1 min-w-0">
-                            <div class="text-gray-400 text-xs mb-1">Filename</div>
-                            <div id="filenameText" class="text-white font-mono text-sm truncate">-</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Footer -->
-            <div class="mt-10 pt-6 border-t border-white/10 text-center">
-                <p class="text-gray-500 text-sm">
-                    Supports HTTP/HTTPS • Max 2GB per file • Auto-split enabled
-                </p>
-                <div class="flex items-center justify-center gap-4 mt-4">
-                    <div class="flex items-center gap-2 text-xs text-gray-600">
-                        <span class="w-2 h-2 rounded-full bg-green-500"></span>
-                        WebSocket <span id="wsStatus">Connecting...</span>
-                    </div>
-                </div>
+            <div class="w-full bg-gray-800 rounded-full h-2.5">
+                <div id="progressBar" class="bg-gradient-to-r from-cyan-400 to-blue-500 h-2.5 rounded-full" style="width: 0%"></div>
             </div>
         </div>
     </div>
-    
-    <!-- Toast Notification -->
-    <div id="toast" class="toast">
-        <div id="toastMessage" class="text-white font-medium"></div>
-    </div>
 
     <script>
-        // Initialize particles
-        function createParticles() {
-            const container = document.getElementById('particles');
-            for (let i = 0; i < 30; i++) {
-                const particle = document.createElement('div');
-                particle.className = 'particle';
-                particle.style.left = Math.random() * 100 + '%';
-                particle.style.animationDelay = Math.random() * 15 + 's';
-                particle.style.animationDuration = (10 + Math.random() * 10) + 's';
-                container.appendChild(particle);
-            }
-        }
-        createParticles();
-        
-        // WebSocket setup
         let ws;
-        let reconnectAttempts = 0;
-        const maxReconnectAttempts = 5;
         
         function connect() {
-            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(wsProtocol + '//' + window.location.host + '/ws');
-            
-            ws.onopen = function() {
-                console.log('WebSocket connected');
-                document.getElementById('wsStatus').textContent = 'Connected';
-                document.getElementById('wsStatus').className = 'text-green-500';
-                reconnectAttempts = 0;
-            };
+            ws = new WebSocket(`ws://${window.location.host}/ws`);
             
             ws.onmessage = function(event) {
                 const data = JSON.parse(event.data);
-                handleMessage(data);
+                
+                const statusArea = document.getElementById('statusArea');
+                const statusText = document.getElementById('statusText');
+                const percentageText = document.getElementById('percentageText');
+                const progressBar = document.getElementById('progressBar');
+                const leechBtn = document.getElementById('leechBtn');
+                
+                statusArea.classList.remove('hidden');
+                
+                if (data.status === 'error') {
+                    statusText.innerText = "Error: " + data.message;
+                    statusText.className = "text-red-400";
+                    leechBtn.disabled = false;
+                    leechBtn.innerText = "Leech to Telegram";
+                    return;
+                }
+
+                if (data.status === 'completed') {
+                    statusText.innerText = data.message;
+                    statusText.className = "text-green-400";
+                    percentageText.innerText = "100%";
+                    progressBar.style.width = "100%";
+                    leechBtn.disabled = false;
+                    leechBtn.innerText = "Leech again";
+                    return;
+                }
+                
+                statusText.className = "text-gray-300";
+                statusText.innerText = data.status.charAt(0).toUpperCase() + data.status.slice(1) + "...";
+                
+                if (data.percentage !== undefined) {
+                    percentageText.innerText = data.percentage + "%";
+                    progressBar.style.width = data.percentage + "%";
+                }
             };
             
             ws.onclose = function() {
-                console.log('WebSocket closed');
-                document.getElementById('wsStatus').textContent = 'Disconnected';
-                document.getElementById('wsStatus').className = 'text-red-500';
-                
-                if (reconnectAttempts < maxReconnectAttempts) {
-                    reconnectAttempts++;
-                    setTimeout(connect, 1000 * reconnectAttempts);
-                }
-            };
-            
-            ws.onerror = function(error) {
-                console.error('WebSocket error:', error);
+                console.log("WebSocket connection closed. Reconnecting...");
+                setTimeout(connect, 1000);
             };
         }
-        
-        function handleMessage(data) {
-            const statusArea = document.getElementById('statusArea');
-            const statusBadge = document.getElementById('statusBadge');
-            const statusText = document.getElementById('statusText');
-            const percentageText = document.getElementById('percentageText');
-            const progressBar = document.getElementById('progressBar');
-            const leechBtn = document.getElementById('leechBtn');
-            const btnText = document.getElementById('btnText');
-            const btnIcon = document.getElementById('btnIcon');
-            const btnSpinner = document.getElementById('btnSpinner');
-            
-            statusArea.classList.remove('hidden');
-            
-            // Error handling
-            if (data.status === 'error') {
-                statusBadge.className = 'status-badge status-error';
-                statusText.innerText = 'Error';
-                percentageText.innerText = '!';
-                progressBar.style.width = '100%';
-                progressBar.style.background = '#ef4444';
-                
-                leechBtn.disabled = false;
-                btnText.innerText = 'Try Again';
-                btnIcon.classList.remove('hidden');
-                btnSpinner.classList.add('hidden');
-                
-                showToast(data.message, 'error');
-                return;
-            }
-            
-            // Success handling
-            if (data.status === 'download_complete' || data.status === 'completed') {
-                statusBadge.className = 'status-badge status-complete';
-                statusText.innerText = 'Complete!';
-                percentageText.innerText = '100%';
-                percentageText.className = 'font-mono text-2xl font-bold text-green-400';
-                progressBar.style.width = '100%';
-                
-                leechBtn.disabled = false;
-                btnText.innerText = 'Download Another';
-                btnIcon.classList.remove('hidden');
-                btnSpinner.classList.add('hidden');
-                
-                // Show file info
-                if (data.filename) {
-                    document.getElementById('fileInfo').classList.remove('hidden');
-                    document.getElementById('filenameText').innerText = data.filename;
-                }
-                
-                showToast('Download completed successfully!', 'success');
-                return;
-            }
-            
-            // Progress handling
-            if (data.percentage !== undefined) {
-                statusBadge.className = 'status-badge status-downloading';
-                statusText.innerText = formatStatus(data.status);
-                percentageText.innerText = data.percentage + '%';
-                progressBar.style.width = data.percentage + '%';
-                
-                // Update stats
-                if (data.current !== undefined) {
-                    document.getElementById('downloadedSize').innerText = formatBytes(data.current);
-                }
-                if (data.total !== undefined && data.total > 0) {
-                    document.getElementById('totalSize').innerText = formatBytes(data.total);
-                }
-                
-                // Calculate speed (simplified)
-                if (data.current && data.total) {
-                    const speed = calculateSpeed(data.current, data.total, data.percentage);
-                    document.getElementById('speedText').innerText = speed;
-                }
-            }
-        }
-        
-        function formatStatus(status) {
-            const statusMap = {
-                'resolving': 'Resolving URL...',
-                'downloading': 'Downloading...',
-                'upload_prep': 'Preparing upload...',
-                'uploading': 'Uploading...',
-                'starting': 'Starting...'
-            };
-            return statusMap[status] || status.charAt(0).toUpperCase() + status.slice(1) + '...';
-        }
-        
-        function formatBytes(bytes) {
-            if (bytes === 0) return '0 B';
-            const k = 1024;
-            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-        }
-        
-        function calculateSpeed(current, total, percentage) {
-            // Simplified speed calculation
-            if (percentage >= 100) return 'Done';
-            // Mock speed for visual effect
-            const speeds = ['2.5 MB/s', '3.2 MB/s', '4.1 MB/s', '2.8 MB/s', '5.0 MB/s'];
-            return speeds[Math.floor(Date.now() / 1000) % speeds.length];
-        }
-        
-        function handleKeyPress(event) {
-            if (event.key === 'Enter') {
-                startLeech();
-            }
-            // Show/hide clear button
-            const input = document.getElementById('urlInput');
-            const clearBtn = document.getElementById('clearBtn');
-            clearBtn.style.display = input.value ? 'block' : 'none';
-        }
-        
-        function clearInput() {
-            const input = document.getElementById('urlInput');
-            input.value = '';
-            input.focus();
-            document.getElementById('clearBtn').style.display = 'none';
-        }
-        
-        // Monitor input for clear button
-        document.getElementById('urlInput').addEventListener('input', function() {
-            document.getElementById('clearBtn').style.display = this.value ? 'block' : 'none';
-        });
-        
+
         function startLeech() {
             const urlInput = document.getElementById('urlInput');
             const url = urlInput.value.trim();
             const leechBtn = document.getElementById('leechBtn');
-            const btnText = document.getElementById('btnText');
-            const btnIcon = document.getElementById('btnIcon');
-            const btnSpinner = document.getElementById('btnSpinner');
             
-            if (!url) {
-                showToast('Please enter a URL', 'error');
-                urlInput.focus();
-                return;
+            if (!url) return alert("Please enter a URL");
+            
+            if (ws.readyState === WebSocket.OPEN) {
+                leechBtn.disabled = true;
+                leechBtn.innerText = "Processing...";
+                ws.send(JSON.stringify({url: url}));
+            } else {
+                alert("Connection failed. Please refresh the page.");
             }
-            
-            if (!url.startsWith('http://') && !url.startsWith('https://')) {
-                showToast('URL must start with http:// or https://', 'error');
-                return;
-            }
-            
-            if (ws.readyState !== WebSocket.OPEN) {
-                showToast('Connection not ready. Please wait...', 'error');
-                return;
-            }
-            
-            // Reset UI
-            document.getElementById('statusArea').classList.remove('hidden');
-            document.getElementById('progressBar').style.width = '0%';
-            document.getElementById('progressBar').style.background = '';
-            document.getElementById('percentageText').className = 'font-mono text-2xl font-bold text-cyan-400';
-            document.getElementById('fileInfo').classList.add('hidden');
-            
-            // Update button state
-            leechBtn.disabled = true;
-            btnText.innerText = 'Processing...';
-            btnIcon.classList.add('hidden');
-            btnSpinner.classList.remove('hidden');
-            
-            ws.send(JSON.stringify({url: url}));
         }
-        
-        function showToast(message, type) {
-            const toast = document.getElementById('toast');
-            const toastMessage = document.getElementById('toastMessage');
-            
-            toast.className = 'toast ' + type;
-            toastMessage.innerText = message;
-            toast.classList.add('show');
-            
-            setTimeout(() => {
-                toast.classList.remove('show');
-            }, 4000);
-        }
-        
-        // Initialize
+
         connect();
     </script>
 </body>
